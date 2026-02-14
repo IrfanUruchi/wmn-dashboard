@@ -1,5 +1,9 @@
 import pandas as pd
 import altair as alt
+import streamlit as st
+
+st.set_page_config(layout="wide")
+
 
 st.set_page_config(layout="wide")
 st.title("🌐 WMN Distributed Network Dashboard")
