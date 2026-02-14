@@ -66,7 +66,6 @@ data_store = init_mqtt()
 st.set_page_config(layout="wide")
 st.title("WMN Distributed Network Dashboard")
 
-st.write("MQTT Broker:", MQTT_BROKER)
 
 st.subheader("Live Metrics")
 if data_store["metrics"]:
