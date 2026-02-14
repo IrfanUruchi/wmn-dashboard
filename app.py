@@ -91,6 +91,11 @@ for device, data in data_store["analysis"].items():
 st.subheader("LLM Explanations")
 for device, data in data_store["explain"].items():
     st.json(data)
+
+
+st.write("Broker:", MQTT_BROKER)
+st.write("Username:", MQTT_USERNAME)
+
 # Q/A Section
 
 st.subheader("Ask the explainer")
