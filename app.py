@@ -44,10 +44,16 @@ def init_mqtt():
             with lock:
                 if msg.topic.startswith("wmn/metrics"):
                     data_store["metrics"][device_id] = payload
-                    latency = payload.get("latency_ms")
+
+                    metrics_block = payload.get("metrics", {})
+                    latency = metrics_block.get("latency_ms_avg")
+
                     if isinstance(latency, (int, float)):
                         dq = data_store["latency_hist"].setdefault(device_id, deque(maxlen=120))
-                        dq.append({"timestamp": pd.Timestamp.utcnow(), "latency_ms": float(latency)})
+                        dq.append({
+                            "timestamp": pd.Timestamp.utcnow(),
+                            "latency_ms": float(latency)
+                        })
 
                 elif msg.topic.startswith("wmn/analysis"):
                     data_store["analysis"][device_id] = payload
@@ -106,16 +112,18 @@ if not all_devices:
 
 device = st.selectbox("Select Device", all_devices)
 
-metrics = data_store["metrics"].get(device, {})
-analysis = data_store["analysis"].get(device, {})
-explain = data_store["explain"].get(device, {})
+metrics_payload = data_store["metrics"].get(device, {})
+analysis_payload = data_store["analysis"].get(device, {})
+explain_payload = data_store["explain"].get(device, {})
+
+metrics_block = metrics_payload.get("metrics", {})
+
+rssi = metrics_block.get("rssi_dbm")
+latency = metrics_block.get("latency_ms_avg")
+jitter = metrics_block.get("jitter_ms")
+score = analysis_payload.get("analysis", {}).get("wireless_score_0_100")
 
 c1, c2, c3, c4 = st.columns(4)
-
-rssi = metrics.get("rssi")
-latency = metrics.get("latency_ms")
-jitter = metrics.get("jitter_ms")
-score = analysis.get("experience_score")
 
 c1.metric("📶 RSSI (dBm)", "—" if rssi is None else rssi)
 c2.metric("⏱ Latency (ms)", "—" if latency is None else latency)
@@ -147,17 +155,17 @@ else:
 st.divider()
 
 st.subheader("🧠 LLM Explanation")
-if explain:
-    text = explain.get("text") or explain.get("explanation") or json.dumps(explain, indent=2)
+if explain_payload:
+    text = explain_payload.get("text") or json.dumps(explain_payload, indent=2)
     st.success(text)
 else:
     st.info("No explanation yet.")
 
 with st.expander("Raw payloads"):
     colA, colB, colC = st.columns(3)
-    colA.json(metrics)
-    colB.json(analysis)
-    colC.json(explain)
+    colA.json(metrics_payload)
+    colB.json(analysis_payload)
+    colC.json(explain_payload)
 
 st.divider()
 
