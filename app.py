@@ -1,7 +1,6 @@
 import streamlit as st
 import os
 import json
-import threading
 import requests
 import paho.mqtt.client as mqtt
 
@@ -11,8 +10,6 @@ MQTT_BROKER = os.getenv("MQTT_BROKER")
 MQTT_PORT = int(os.getenv("MQTT_PORT", 8883))
 MQTT_USERNAME = os.getenv("MQTT_USERNAME")
 MQTT_PASSWORD = os.getenv("MQTT_PASSWORD")
-MQTT_TLS = True
-
 EXPLAINER_HTTP_BASE = os.getenv("EXPLAINER_HTTP_BASE")
 
 TOPICS = [
@@ -21,17 +18,7 @@ TOPICS = [
     "wmn/explain/#"
 ]
 
-# Global message store 
-if "data_store" not in st.session_state:
-    st.session_state.data_store = {
-        "metrics": {},
-        "analysis": {},
-        "explain": {}
-    }
-
-data_store = st.session_state.data_store
-
-# MQTT handling
+# MQTT Initialization
 
 @st.cache_resource
 def init_mqtt():
@@ -41,7 +28,7 @@ def init_mqtt():
         "explain": {}
     }
 
-    def on_connect(client, userdata, flags, rc):
+    def on_connect(client, userdata, flags, rc, properties=None):
         for topic in TOPICS:
             client.subscribe(topic)
 
@@ -77,13 +64,7 @@ def init_mqtt():
 
 data_store = init_mqtt()
 
-
-
-# Start MQTT only once
-if "mqtt_started" not in st.session_state:
-    threading.Thread(target=start_mqtt, daemon=True).start()
-    st.session_state.mqtt_started = True
-
+st.autorefresh(interval=3000, key="refresh")
 
 # UI
 
@@ -98,14 +79,12 @@ st.subheader("Analyzer Results")
 for device, data in data_store["analysis"].items():
     st.json(data)
 
-st.subheader("LLM Explanations")
+st.subheader(" LLM Explanations")
 for device, data in data_store["explain"].items():
     st.json(data)
-
-
 # Q/A Section
 
-st.subheader("Ask the explainer")
+st.subheader("Ask the Explainer")
 
 question = st.text_input("Ask about current network conditions")
 
