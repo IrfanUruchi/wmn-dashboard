@@ -4,8 +4,8 @@ import json
 import threading
 import requests
 import paho.mqtt.client as mqtt
-from datetime import datetime
-# Environment variables
+
+# Config
 
 MQTT_BROKER = os.getenv("MQTT_BROKER")
 MQTT_PORT = int(os.getenv("MQTT_PORT", 8883))
@@ -21,12 +21,16 @@ TOPICS = [
     "wmn/explain/#"
 ]
 
-# Streamlit sstate
-st.session_state.setdefault("metrics", {})
-st.session_state.setdefault("analysis", {})
-st.session_state.setdefault("explain", {})
+# Global message store 
+if "data_store" not in st.session_state:
+    st.session_state.data_store = {
+        "metrics": {},
+        "analysis": {},
+        "explain": {}
+    }
 
-  
+data_store = st.session_state.data_store
+
 # MQTT handling
 
 def on_connect(client, userdata, flags, rc):
@@ -39,16 +43,17 @@ def on_message(client, userdata, msg):
         device_id = payload.get("device_id", "unknown")
 
         if msg.topic.startswith("wmn/metrics"):
-            st.session_state.metrics[device_id] = payload
+            data_store["metrics"][device_id] = payload
 
         elif msg.topic.startswith("wmn/analysis"):
-            st.session_state.analysis[device_id] = payload
+            data_store["analysis"][device_id] = payload
 
         elif msg.topic.startswith("wmn/explain"):
-            st.session_state.explain[device_id] = payload
+            data_store["explain"][device_id] = payload
 
     except Exception as e:
         print("MQTT error:", e)
+
 
 def start_mqtt():
     client = mqtt.Client()
@@ -61,10 +66,14 @@ def start_mqtt():
     client.on_message = on_message
 
     client.connect(MQTT_BROKER, MQTT_PORT, 60)
-    client.loop_forever()
+    client.loop_start()
 
-# Run MQTT in background
-threading.Thread(target=start_mqtt, daemon=True).start()
+
+# Start MQTT only once
+if "mqtt_started" not in st.session_state:
+    threading.Thread(target=start_mqtt, daemon=True).start()
+    st.session_state.mqtt_started = True
+
 
 # UI
 
@@ -72,24 +81,19 @@ st.set_page_config(layout="wide")
 st.title("WMN Distributed Network Dashboard")
 
 st.subheader("Live Metrics")
-
-for device, data in st.session_state.metrics.items():
+for device, data in data_store["metrics"].items():
     st.json(data)
 
 st.subheader("Analyzer Results")
-
-for device, data in st.session_state.analysis.items():
+for device, data in data_store["analysis"].items():
     st.json(data)
 
 st.subheader("LLM Explanations")
-
-for device, data in st.session_state.explain.items():
+for device, data in data_store["explain"].items():
     st.json(data)
+# Q/A Section
 
-
-# Q and A Section
-
-st.subheader("Ask the Explainer")
+st.subheader("Ask the explainer")
 
 question = st.text_input("Ask about current network conditions")
 
