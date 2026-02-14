@@ -33,40 +33,50 @@ data_store = st.session_state.data_store
 
 # MQTT handling
 
-def on_connect(client, userdata, flags, rc):
-    for topic in TOPICS:
-        client.subscribe(topic)
+@st.cache_resource
+def init_mqtt():
+    data_store = {
+        "metrics": {},
+        "analysis": {},
+        "explain": {}
+    }
 
-def on_message(client, userdata, msg):
-    try:
-        payload = json.loads(msg.payload.decode())
-        device_id = payload.get("device_id", "unknown")
+    def on_connect(client, userdata, flags, rc):
+        for topic in TOPICS:
+            client.subscribe(topic)
 
-        if msg.topic.startswith("wmn/metrics"):
-            data_store["metrics"][device_id] = payload
+    def on_message(client, userdata, msg):
+        try:
+            payload = json.loads(msg.payload.decode())
+            device_id = payload.get("device_id", "unknown")
 
-        elif msg.topic.startswith("wmn/analysis"):
-            data_store["analysis"][device_id] = payload
+            if msg.topic.startswith("wmn/metrics"):
+                data_store["metrics"][device_id] = payload
 
-        elif msg.topic.startswith("wmn/explain"):
-            data_store["explain"][device_id] = payload
+            elif msg.topic.startswith("wmn/analysis"):
+                data_store["analysis"][device_id] = payload
 
-    except Exception as e:
-        print("MQTT error:", e)
+            elif msg.topic.startswith("wmn/explain"):
+                data_store["explain"][device_id] = payload
 
+        except Exception as e:
+            print("MQTT error:", e)
 
-def start_mqtt():
-    client = mqtt.Client()
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
     client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
-
-    if MQTT_TLS:
-        client.tls_set()
+    client.tls_set()
 
     client.on_connect = on_connect
     client.on_message = on_message
 
     client.connect(MQTT_BROKER, MQTT_PORT, 60)
     client.loop_start()
+
+    return data_store
+
+
+data_store = init_mqtt()
+
 
 
 # Start MQTT only once
