@@ -18,21 +18,46 @@ EXPLAINER_HTTP_BASE = os.getenv("EXPLAINER_HTTP_BASE")
 
 TOPICS = ["wmn/metrics/#", "wmn/analysis/#", "wmn/explain/#"]
 
+st.set_page_config(layout="wide")
+
+st.markdown("""
+<style>
+.metric-card {
+    padding: 20px;
+    border-radius: 12px;
+    background-color: #111827;
+}
+.status-green { color: #22c55e; font-weight: bold; }
+.status-orange { color: #f59e0b; font-weight: bold; }
+.status-red { color: #ef4444; font-weight: bold; }
+.live-dot {
+    height:10px;
+    width:10px;
+    background-color:#22c55e;
+    border-radius:50%;
+    display:inline-block;
+    margin-right:6px;
+}
+</style>
+""", unsafe_allow_html=True)
+
 @st.cache_resource
 def init_mqtt():
     lock = threading.Lock()
-
     data_store = {
         "metrics": {},
         "analysis": {},
         "explain": {},
         "latency_hist": {},
+        "connected": False,
+        "last_msg": 0,
     }
 
     if not MQTT_BROKER:
         return data_store
 
     def on_connect(client, userdata, flags, reason_code, properties):
+        data_store["connected"] = True
         for topic in TOPICS:
             client.subscribe(topic)
 
@@ -42,12 +67,12 @@ def init_mqtt():
             device_id = payload.get("device_id", "unknown")
 
             with lock:
+                data_store["last_msg"] = time.time()
+
                 if msg.topic.startswith("wmn/metrics"):
                     data_store["metrics"][device_id] = payload
-
                     metrics_block = payload.get("metrics", {})
                     latency = metrics_block.get("latency_ms_avg")
-
                     if isinstance(latency, (int, float)):
                         dq = data_store["latency_hist"].setdefault(device_id, deque(maxlen=120))
                         dq.append({
@@ -60,8 +85,7 @@ def init_mqtt():
 
                 elif msg.topic.startswith("wmn/explain"):
                     data_store["explain"][device_id] = payload
-
-        except Exception:
+        except:
             pass
 
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
@@ -70,110 +94,111 @@ def init_mqtt():
         client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
 
     client.tls_set()
-    client.reconnect_delay_set(min_delay=1, max_delay=30)
-
     client.on_connect = on_connect
     client.on_message = on_message
 
     try:
         client.connect_async(MQTT_BROKER, MQTT_PORT, 60)
         client.loop_start()
-    except Exception:
+    except:
         pass
 
     return data_store
 
 
-st.set_page_config(layout="wide")
-st.title("🌐 WMN Distributed Network Dashboard")
-
 data_store = init_mqtt()
 
-if not MQTT_BROKER:
-    st.error("MQTT_BROKER is not set.")
-    st.stop()
+st.title("Wireless Network Operations Dashboard")
 
-with st.sidebar:
-    st.header("Controls")
-    live_refresh = st.toggle("Live metrics refresh", value=True)
-    refresh_interval = st.slider("Refresh interval (sec)", 1, 10, 2)
+colA, colB = st.columns([6, 1])
 
-all_devices = sorted(list(data_store["metrics"].keys()))
+with colA:
+    st.markdown("### System Overview")
 
-if not all_devices:
-    st.info("Waiting for devices...")
-    if live_refresh:
-        time.sleep(refresh_interval)
-        st.rerun()
-    st.stop()
-
-device = st.selectbox("Select Device", all_devices)
-
-metrics_container = st.container()
-
-with metrics_container:
-    metrics_payload = data_store["metrics"].get(device, {})
-    analysis_payload = data_store["analysis"].get(device, {})
-    explain_payload = data_store["explain"].get(device, {})
-
-    metrics_block = metrics_payload.get("metrics", {})
-
-    rssi = metrics_block.get("rssi_dbm")
-    latency = metrics_block.get("latency_ms_avg")
-    jitter = metrics_block.get("jitter_ms")
-    score = analysis_payload.get("analysis", {}).get("wireless_score_0_100")
-
-    c1, c2, c3, c4 = st.columns(4)
-
-    c1.metric("📶 RSSI (dBm)", "—" if rssi is None else rssi)
-    c2.metric("⏱ Latency (ms)", "—" if latency is None else latency)
-    c3.metric("📡 Jitter (ms)", "—" if jitter is None else jitter)
-    c4.metric("⭐ Experience Score", "—" if score is None else score)
-
-    st.divider()
-
-    st.subheader("⭐ Experience Score")
-    if isinstance(score, (int, float)):
-        st.progress(max(0.0, min(1.0, float(score) / 100.0)))
+with colB:
+    if data_store["connected"]:
+        st.markdown('<span class="live-dot"></span><span class="status-green">LIVE</span>', unsafe_allow_html=True)
     else:
-        st.info("No experience score yet.")
+        st.markdown('<span class="status-red">OFFLINE</span>', unsafe_allow_html=True)
 
-    st.subheader("📈 Latency Trend")
+if not data_store["metrics"]:
+    st.info("Waiting for telemetry...")
+    time.sleep(2)
+    st.rerun()
 
-    hist = list(data_store["latency_hist"].get(device, []))
+device = st.selectbox("Device", sorted(data_store["metrics"].keys()))
 
-    if hist:
-        df = pd.DataFrame(hist)
-        chart = alt.Chart(df).mark_line().encode(
-            x="timestamp:T",
-            y="latency_ms:Q"
-        ).properties(height=250)
-        st.altair_chart(chart, use_container_width=True)
-    else:
-        st.info("No latency history yet.")
-
-st.divider()
-
-st.subheader("🧠 LLM Explanation")
-
+metrics_payload = data_store["metrics"].get(device, {})
+analysis_payload = data_store["analysis"].get(device, {})
 explain_payload = data_store["explain"].get(device, {})
-if explain_payload:
-    text = explain_payload.get("text") or json.dumps(explain_payload, indent=2)
-    st.success(text)
-else:
-    st.info("No explanation yet.")
+
+metrics_block = metrics_payload.get("metrics", {})
+
+rssi = metrics_block.get("rssi_dbm")
+latency = metrics_block.get("latency_ms_avg")
+jitter = metrics_block.get("jitter_ms")
+score = analysis_payload.get("analysis", {}).get("wireless_score_0_100")
+
+def metric_color(value, thresholds):
+    if value is None:
+        return ""
+    if value <= thresholds[0]:
+        return "status-green"
+    elif value <= thresholds[1]:
+        return "status-orange"
+    return "status-red"
+
+k1, k2, k3, k4 = st.columns(4)
+
+with k1:
+    st.metric("RSSI (dBm)", rssi)
+
+with k2:
+    st.metric("Latency (ms)", latency)
+    if latency:
+        st.markdown(f'<span class="{metric_color(latency,[80,150])}">Health</span>', unsafe_allow_html=True)
+
+with k3:
+    st.metric("Jitter (ms)", jitter)
+
+with k4:
+    st.metric("Experience Score", score)
+    if score:
+        st.progress(score/100)
 
 st.divider()
 
-st.subheader("❓ Ask the Explainer")
-question = st.text_input("Ask about current network conditions")
+st.subheader("Latency Trend")
 
-if st.button("Send Question"):
-    if not EXPLAINER_HTTP_BASE:
-        st.error("EXPLAINER_HTTP_BASE not configured.")
-    elif not question.strip():
-        st.warning("Type a question.")
-    else:
+hist = list(data_store["latency_hist"].get(device, []))
+
+if hist:
+    df = pd.DataFrame(hist)
+    chart = alt.Chart(df).mark_line(point=False).encode(
+        x="timestamp:T",
+        y="latency_ms:Q"
+    ).properties(height=300)
+    st.altair_chart(chart, use_container_width=True)
+else:
+    st.info("No trend data yet")
+
+st.divider()
+
+st.subheader("AI Insight")
+
+if explain_payload:
+    st.success(explain_payload.get("text") or json.dumps(explain_payload, indent=2))
+else:
+    st.info("Awaiting AI explanation...")
+
+st.divider()
+
+st.subheader("Ask AI")
+
+question = st.text_input("Network question")
+
+if st.button("Submit"):
+    if EXPLAINER_HTTP_BASE and question.strip():
         try:
             resp = requests.post(
                 f"{EXPLAINER_HTTP_BASE}/explain",
@@ -182,8 +207,7 @@ if st.button("Send Question"):
             )
             st.json(resp.json())
         except Exception as e:
-            st.error(f"Request failed: {e}")
+            st.error(str(e))
 
-if live_refresh:
-    time.sleep(refresh_interval)
-    st.rerun()
+time.sleep(2)
+st.rerun()
