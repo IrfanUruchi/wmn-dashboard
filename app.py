@@ -27,6 +27,7 @@ def init_mqtt():
         "analysis": {},
         "explain": {},
         "latency_hist": {},
+        "msg_count": 0,
     }
 
     if not MQTT_BROKER:
@@ -50,16 +51,16 @@ def init_mqtt():
 
                     if isinstance(latency, (int, float)):
                         dq = data_store["latency_hist"].setdefault(device_id, deque(maxlen=120))
-                        dq.append({
-                            "timestamp": pd.Timestamp.utcnow(),
-                            "latency_ms": float(latency)
-                        })
+                        dq.append({"timestamp": pd.Timestamp.utcnow(), "latency_ms": float(latency)})
 
                 elif msg.topic.startswith("wmn/analysis"):
                     data_store["analysis"][device_id] = payload
 
                 elif msg.topic.startswith("wmn/explain"):
                     data_store["explain"][device_id] = payload
+
+                data_store["msg_count"] += 1
+
         except Exception:
             pass
 
@@ -94,15 +95,25 @@ if not MQTT_BROKER:
 
 with st.sidebar:
     st.header("Controls")
-    auto_refresh = st.toggle("Auto refresh", value=True)
-    refresh_sec = st.slider("Refresh interval (sec)", 1, 15, 3)
+    live_updates = st.toggle("Live updates", value=True)
+    check_every_ms = st.slider("Check new data (ms)", 200, 2000, 600, step=100)
 
-if auto_refresh:
-    now = time.time()
-    last = st.session_state.get("_last_refresh", 0)
-    if now - last >= refresh_sec:
-        st.session_state["_last_refresh"] = now
+if live_updates:
+    current = int(data_store.get("msg_count", 0))
+    last = st.session_state.get("_last_msg_count", -1)
+
+    if current != last:
+        st.session_state["_last_msg_count"] = current
         st.rerun()
+
+    st.session_state["_tick"] = st.session_state.get("_tick", 0) + 1
+    tick = st.session_state["_tick"]
+    st.session_state["_tick"] = tick
+    st.session_state["_last_tick_ts"] = time.time()
+    st.session_state["_sleep_ms"] = check_every_ms
+
+    time.sleep(check_every_ms / 1000.0)
+    st.rerun()
 
 all_devices = sorted(list(data_store["metrics"].keys()))
 
