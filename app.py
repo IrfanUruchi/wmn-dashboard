@@ -22,14 +22,10 @@ TOPICS = [
 ]
 
 # Streamlit sstate
-if "metrics" not in st.session_state:
-    st.session_state.metrics = {}
+st.session_state.setdefault("metrics", {})
+st.session_state.setdefault("analysis", {})
+st.session_state.setdefault("explain", {})
 
-if "analysis" not in st.session_state:
-    st.session_state.analysis = {}
-
-if "explain" not in st.session_state:
-    st.session_state.explain
   
 # MQTT handling
 
