@@ -27,7 +27,6 @@ def init_mqtt():
         "analysis": {},
         "explain": {},
         "latency_hist": {},
-        "msg_count": 0,
     }
 
     if not MQTT_BROKER:
@@ -51,15 +50,16 @@ def init_mqtt():
 
                     if isinstance(latency, (int, float)):
                         dq = data_store["latency_hist"].setdefault(device_id, deque(maxlen=120))
-                        dq.append({"timestamp": pd.Timestamp.utcnow(), "latency_ms": float(latency)})
+                        dq.append({
+                            "timestamp": pd.Timestamp.utcnow(),
+                            "latency_ms": float(latency)
+                        })
 
                 elif msg.topic.startswith("wmn/analysis"):
                     data_store["analysis"][device_id] = payload
 
                 elif msg.topic.startswith("wmn/explain"):
                     data_store["explain"][device_id] = payload
-
-                data_store["msg_count"] += 1
 
         except Exception:
             pass
@@ -90,93 +90,78 @@ st.title("🌐 WMN Distributed Network Dashboard")
 data_store = init_mqtt()
 
 if not MQTT_BROKER:
-    st.error("MQTT_BROKER is not set in environment variables.")
+    st.error("MQTT_BROKER is not set.")
     st.stop()
 
 with st.sidebar:
     st.header("Controls")
-    live_updates = st.toggle("Live updates", value=True)
-    check_every_ms = st.slider("Check new data (ms)", 200, 2000, 600, step=100)
-
-if live_updates:
-    current = int(data_store.get("msg_count", 0))
-    last = st.session_state.get("_last_msg_count", -1)
-
-    if current != last:
-        st.session_state["_last_msg_count"] = current
-        st.rerun()
-
-    st.session_state["_tick"] = st.session_state.get("_tick", 0) + 1
-    tick = st.session_state["_tick"]
-    st.session_state["_tick"] = tick
-    st.session_state["_last_tick_ts"] = time.time()
-    st.session_state["_sleep_ms"] = check_every_ms
-
-    time.sleep(check_every_ms / 1000.0)
-    st.rerun()
+    live_refresh = st.toggle("Live metrics refresh", value=True)
+    refresh_interval = st.slider("Refresh interval (sec)", 1, 10, 2)
 
 all_devices = sorted(list(data_store["metrics"].keys()))
 
 if not all_devices:
     st.info("Waiting for devices...")
+    if live_refresh:
+        time.sleep(refresh_interval)
+        st.rerun()
     st.stop()
 
 device = st.selectbox("Select Device", all_devices)
 
-metrics_payload = data_store["metrics"].get(device, {})
-analysis_payload = data_store["analysis"].get(device, {})
-explain_payload = data_store["explain"].get(device, {})
+metrics_container = st.container()
 
-metrics_block = metrics_payload.get("metrics", {})
+with metrics_container:
+    metrics_payload = data_store["metrics"].get(device, {})
+    analysis_payload = data_store["analysis"].get(device, {})
+    explain_payload = data_store["explain"].get(device, {})
 
-rssi = metrics_block.get("rssi_dbm")
-latency = metrics_block.get("latency_ms_avg")
-jitter = metrics_block.get("jitter_ms")
-score = analysis_payload.get("analysis", {}).get("wireless_score_0_100")
+    metrics_block = metrics_payload.get("metrics", {})
 
-c1, c2, c3, c4 = st.columns(4)
+    rssi = metrics_block.get("rssi_dbm")
+    latency = metrics_block.get("latency_ms_avg")
+    jitter = metrics_block.get("jitter_ms")
+    score = analysis_payload.get("analysis", {}).get("wireless_score_0_100")
 
-c1.metric("📶 RSSI (dBm)", "—" if rssi is None else rssi)
-c2.metric("⏱ Latency (ms)", "—" if latency is None else latency)
-c3.metric("📡 Jitter (ms)", "—" if jitter is None else jitter)
-c4.metric("⭐ Experience Score", "—" if score is None else score)
+    c1, c2, c3, c4 = st.columns(4)
 
-st.divider()
+    c1.metric("📶 RSSI (dBm)", "—" if rssi is None else rssi)
+    c2.metric("⏱ Latency (ms)", "—" if latency is None else latency)
+    c3.metric("📡 Jitter (ms)", "—" if jitter is None else jitter)
+    c4.metric("⭐ Experience Score", "—" if score is None else score)
 
-st.subheader("⭐ Experience Score")
-if isinstance(score, (int, float)):
-    st.progress(max(0.0, min(1.0, float(score) / 100.0)))
-else:
-    st.info("No experience score yet.")
+    st.divider()
 
-st.subheader("📈 Latency Trend")
-hist = list(data_store["latency_hist"].get(device, []))
+    st.subheader("⭐ Experience Score")
+    if isinstance(score, (int, float)):
+        st.progress(max(0.0, min(1.0, float(score) / 100.0)))
+    else:
+        st.info("No experience score yet.")
 
-if hist:
-    df = pd.DataFrame(hist)
-    chart = alt.Chart(df).mark_line().encode(
-        x=alt.X("timestamp:T"),
-        y=alt.Y("latency_ms:Q"),
-        tooltip=["timestamp:T", "latency_ms:Q"]
-    ).properties(height=280)
-    st.altair_chart(chart, use_container_width=True)
-else:
-    st.info("No latency history yet.")
+    st.subheader("📈 Latency Trend")
+
+    hist = list(data_store["latency_hist"].get(device, []))
+
+    if hist:
+        df = pd.DataFrame(hist)
+        chart = alt.Chart(df).mark_line().encode(
+            x="timestamp:T",
+            y="latency_ms:Q"
+        ).properties(height=250)
+        st.altair_chart(chart, use_container_width=True)
+    else:
+        st.info("No latency history yet.")
 
 st.divider()
 
 st.subheader("🧠 LLM Explanation")
+
+explain_payload = data_store["explain"].get(device, {})
 if explain_payload:
     text = explain_payload.get("text") or json.dumps(explain_payload, indent=2)
     st.success(text)
 else:
     st.info("No explanation yet.")
-
-with st.expander("Raw payloads"):
-    colA, colB, colC = st.columns(3)
-    colA.json(metrics_payload)
-    colB.json(analysis_payload)
-    colC.json(explain_payload)
 
 st.divider()
 
@@ -198,3 +183,7 @@ if st.button("Send Question"):
             st.json(resp.json())
         except Exception as e:
             st.error(f"Request failed: {e}")
+
+if live_refresh:
+    time.sleep(refresh_interval)
+    st.rerun()
