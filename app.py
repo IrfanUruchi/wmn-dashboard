@@ -10,10 +10,7 @@ import pandas as pd
 import altair as alt
 import paho.mqtt.client as mqtt
 
-# ----------------------------
-# Config (Streamlit Secrets/Env)
-# ----------------------------
-MQTT_BROKER = os.getenv("MQTT_BROKER")  # REQUIRED
+MQTT_BROKER = os.getenv("MQTT_BROKER")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "8883"))
 MQTT_USERNAME = os.getenv("MQTT_USERNAME")
 MQTT_PASSWORD = os.getenv("MQTT_PASSWORD")
@@ -21,23 +18,18 @@ EXPLAINER_HTTP_BASE = os.getenv("EXPLAINER_HTTP_BASE")
 
 TOPICS = ["wmn/metrics/#", "wmn/analysis/#", "wmn/explain/#"]
 
-# ----------------------------
-# MQTT Singleton
-# ----------------------------
 @st.cache_resource
 def init_mqtt():
     lock = threading.Lock()
 
-    # Store latest payload per device + small history for charts
     data_store = {
         "metrics": {},
         "analysis": {},
         "explain": {},
-        "latency_hist": {},  # device_id -> deque of {timestamp, latency_ms}
+        "latency_hist": {},
     }
 
     if not MQTT_BROKER:
-        # Return empty store; UI will show error nicely
         return data_store
 
     def on_connect(client, userdata, flags, reason_code, properties):
@@ -52,8 +44,6 @@ def init_mqtt():
             with lock:
                 if msg.topic.startswith("wmn/metrics"):
                     data_store["metrics"][device_id] = payload
-
-                    # Optional history: if latency_ms exists, store trend
                     latency = payload.get("latency_ms")
                     if isinstance(latency, (int, float)):
                         dq = data_store["latency_hist"].setdefault(device_id, deque(maxlen=120))
@@ -64,65 +54,62 @@ def init_mqtt():
 
                 elif msg.topic.startswith("wmn/explain"):
                     data_store["explain"][device_id] = payload
-
         except Exception:
-            # Avoid printing secrets; just swallow bad payloads safely
-            return
+            pass
 
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+
     if MQTT_USERNAME and MQTT_PASSWORD:
         client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
 
-    # TLS for 8883
     client.tls_set()
+    client.reconnect_delay_set(min_delay=1, max_delay=30)
 
     client.on_connect = on_connect
     client.on_message = on_message
 
-    client.connect(MQTT_BROKER, MQTT_PORT, 60)
-    client.loop_start()
+    try:
+        client.connect_async(MQTT_BROKER, MQTT_PORT, 60)
+        client.loop_start()
+    except Exception:
+        pass
 
     return data_store
 
 
-# ----------------------------
-# UI
-# ----------------------------
 st.set_page_config(layout="wide")
 st.title("🌐 WMN Distributed Network Dashboard")
 
-data_store = init_mqtt()  # ✅ DEFINE BEFORE USING
+data_store = init_mqtt()
 
 if not MQTT_BROKER:
-    st.error("MQTT_BROKER is not set. Add it in Streamlit Secrets / environment variables.")
+    st.error("MQTT_BROKER is not set in environment variables.")
     st.stop()
 
-# Sidebar controls
 with st.sidebar:
     st.header("Controls")
     auto_refresh = st.toggle("Auto refresh", value=True)
     refresh_sec = st.slider("Refresh interval (sec)", 1, 15, 3)
-    st.caption("Tip: If UI feels laggy, increase interval.")
 
-# Auto refresh (safe)
 if auto_refresh:
-    time.sleep(refresh_sec)
-    st.rerun()
+    now = time.time()
+    last = st.session_state.get("_last_refresh", 0)
+    if now - last >= refresh_sec:
+        st.session_state["_last_refresh"] = now
+        st.rerun()
 
-# ---- DEVICE LIST ----
 all_devices = sorted(list(data_store["metrics"].keys()))
 
 if not all_devices:
-    st.info("Waiting for devices... (no metrics received yet)")
+    st.info("Waiting for devices...")
     st.stop()
 
-device = st.selectbox("Select Device", all_devices, index=0)
+device = st.selectbox("Select Device", all_devices)
 
 metrics = data_store["metrics"].get(device, {})
 analysis = data_store["analysis"].get(device, {})
 explain = data_store["explain"].get(device, {})
 
-# ---- KPI CARDS ----
 c1, c2, c3, c4 = st.columns(4)
 
 rssi = metrics.get("rssi")
@@ -137,62 +124,51 @@ c4.metric("⭐ Experience Score", "—" if score is None else score)
 
 st.divider()
 
-# ---- EXPERIENCE SCORE BAR ----
 st.subheader("⭐ Experience Score")
 if isinstance(score, (int, float)):
     st.progress(max(0.0, min(1.0, float(score) / 100.0)))
 else:
-    st.info("No experience score yet (waiting for analyzer).")
+    st.info("No experience score yet.")
 
-# ---- LATENCY TREND ----
-st.subheader("📈 Latency Trend (last ~120 samples)")
+st.subheader("📈 Latency Trend")
 hist = list(data_store["latency_hist"].get(device, []))
 
 if hist:
     df = pd.DataFrame(hist)
     chart = alt.Chart(df).mark_line().encode(
-        x=alt.X("timestamp:T", title="Time (UTC)"),
-        y=alt.Y("latency_ms:Q", title="Latency (ms)"),
+        x=alt.X("timestamp:T"),
+        y=alt.Y("latency_ms:Q"),
         tooltip=["timestamp:T", "latency_ms:Q"]
     ).properties(height=280)
     st.altair_chart(chart, use_container_width=True)
 else:
-    st.info("No latency history yet (needs latency_ms in metrics payload).")
+    st.info("No latency history yet.")
 
 st.divider()
 
-# ---- LLM EXPLANATION ----
 st.subheader("🧠 LLM Explanation")
 if explain:
     text = explain.get("text") or explain.get("explanation") or json.dumps(explain, indent=2)
     st.success(text)
 else:
-    st.info("No explanation yet (waiting for explainer topic).")
+    st.info("No explanation yet.")
 
-# ---- RAW DEBUG PANELS (collapsible) ----
-with st.expander("Raw payloads (debug)"):
+with st.expander("Raw payloads"):
     colA, colB, colC = st.columns(3)
-    with colA:
-        st.write("metrics")
-        st.json(metrics)
-    with colB:
-        st.write("analysis")
-        st.json(analysis)
-    with colC:
-        st.write("explain")
-        st.json(explain)
+    colA.json(metrics)
+    colB.json(analysis)
+    colC.json(explain)
 
 st.divider()
 
-# ---- Q/A SECTION ----
 st.subheader("❓ Ask the Explainer")
-question = st.text_input("Ask about current network conditions", placeholder="e.g., Why is latency high right now?")
+question = st.text_input("Ask about current network conditions")
 
 if st.button("Send Question"):
     if not EXPLAINER_HTTP_BASE:
         st.error("EXPLAINER_HTTP_BASE not configured.")
     elif not question.strip():
-        st.warning("Type a question first.")
+        st.warning("Type a question.")
     else:
         try:
             resp = requests.post(
