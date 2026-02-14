@@ -3,6 +3,7 @@ import os
 import json
 import requests
 import paho.mqtt.client as mqtt
+import time
 
 # Config
 
@@ -17,18 +18,18 @@ TOPICS = [
     "wmn/analysis/#",
     "wmn/explain/#"
 ]
-
-# MQTT Initialization
+# MQTT Singleton
 
 @st.cache_resource
 def init_mqtt():
+
     data_store = {
         "metrics": {},
         "analysis": {},
         "explain": {}
     }
 
-    def on_connect(client, userdata, flags, rc, properties=None):
+    def on_connect(client, userdata, flags, reason_code, properties):
         for topic in TOPICS:
             client.subscribe(topic)
 
@@ -63,28 +64,36 @@ def init_mqtt():
 
 
 data_store = init_mqtt()
-
-st.autorefresh(interval=3000, key="refresh")
-
 # UI
-
 st.set_page_config(layout="wide")
 st.title("WMN Distributed Network Dashboard")
 
+st.write("MQTT Broker:", MQTT_BROKER)
+
 st.subheader("Live Metrics")
-for device, data in data_store["metrics"].items():
-    st.json(data)
+if data_store["metrics"]:
+    for device, data in data_store["metrics"].items():
+        st.json(data)
+else:
+    st.info("No metrics received yet.")
 
 st.subheader("Analyzer Results")
-for device, data in data_store["analysis"].items():
-    st.json(data)
+if data_store["analysis"]:
+    for device, data in data_store["analysis"].items():
+        st.json(data)
+else:
+    st.info("No analysis received yet.")
 
-st.subheader(" LLM Explanations")
-for device, data in data_store["explain"].items():
-    st.json(data)
+st.subheader("LLM Explanations")
+if data_store["explain"]:
+    for device, data in data_store["explain"].items():
+        st.json(data)
+else:
+    st.info("No explanations received yet.")
+
 # Q/A Section
 
-st.subheader("Ask the Explainer")
+st.subheader(" Ask the Explainer")
 
 question = st.text_input("Ask about current network conditions")
 
@@ -101,3 +110,7 @@ if st.button("Send Question"):
             st.json(response.json())
         except Exception as e:
             st.error(f"Request failed: {e}")
+
+if st.button("Refresh Data"):
+    time.sleep(1)
+    st.experimental_rerun()
