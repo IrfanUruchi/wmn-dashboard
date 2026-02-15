@@ -526,43 +526,89 @@ with tab_device:
 
         st.markdown('<div class="section">Ask the Explainer</div>', unsafe_allow_html=True)
 
-        if "qa_last" not in st.session_state:
-            st.session_state.qa_last = None
-        if "qa_lock_until" not in st.session_state:
-            st.session_state.qa_lock_until = 0.0
+if "qa_last" not in st.session_state:
+    st.session_state.qa_last = None
+if "qa_lock_until" not in st.session_state:
+    st.session_state.qa_lock_until = 0.0
 
-        q = st.text_input("Query", placeholder="e.g., explain latency spikes + whether congestion is likely", key="qa_text")
+q = st.text_input(
+    "Query",
+    placeholder="Why is latency high? Is RSSI sufficient? Is congestion likely?",
+    key="qa_text"
+)
 
-        if st.button("Submit", type="primary"):
-            st.session_state.qa_lock_until = now_s() + 8
-            if not EXPLAINER_HTTP_BASE:
-                st.session_state.qa_last = {"error": "EXPLAINER_HTTP_BASE not configured."}
-            elif not q.strip():
-                st.session_state.qa_last = {"error": "Empty query."}
+if st.button("Submit", type="primary"):
+    st.session_state.qa_lock_until = now_s() + 8
+
+    if not EXPLAINER_HTTP_BASE:
+        st.session_state.qa_last = {"error": "EXPLAINER_HTTP_BASE not configured."}
+
+    elif not q.strip():
+        st.session_state.qa_last = {"error": "Empty query."}
+
+    else:
+        try:
+            structured_prompt = f"""
+You are a fog-layer wireless diagnostics engine.
+
+Device ID: {dev}
+
+Current Metrics:
+{json.dumps(m, indent=2)}
+
+Analyzer Output:
+{json.dumps(a, indent=2)}
+
+User Question:
+{q.strip()}
+
+Instructions:
+- Use ONLY provided telemetry.
+- If data missing, say so clearly.
+- Be technical but concise.
+- Structure output:
+
+Summary:
+Likely Cause:
+Impact:
+Recommended Action:
+"""
+
+            status, data_json, err = http_post_json(
+                f"{EXPLAINER_HTTP_BASE}/explain",
+                {
+                    "analysis": {
+                        "device_id": dev,
+                        "metrics": m if isinstance(m, dict) else {},
+                        "analysis": a if isinstance(a, dict) else {},
+                        "question": structured_prompt,
+                    }
+                },
+                timeout_s=30,
+            )
+
+            if data_json is not None:
+                st.session_state.qa_last = data_json
             else:
-                try:
-                    status, data_json, err = http_post_json(
-                        f"{EXPLAINER_HTTP_BASE}/explain",
-                        {
-                            "analysis": {
-                                "device_id": dev,
-                                "metrics": m if isinstance(m, dict) else {},
-                                "analysis": a if isinstance(a, dict) else {},
-                                "question": q.strip(),
-                             }
-                        },
+                st.session_state.qa_last = err or {
+                    "error": "Unknown response",
+                    "status_code": status,
+                }
 
-                        timeout_s=30,
-                    )
-                    if data_json is not None:
-                        st.session_state.qa_last = data_json
-                    else:
-                        st.session_state.qa_last = err or {"error": "Unknown response", "status_code": status}
-                except Exception as e:
-                    st.session_state.qa_last = {"error": str(e)}
+        except Exception as e:
+            st.session_state.qa_last = {"error": str(e)}
 
-        if st.session_state.qa_last:
-            st.json(st.session_state.qa_last)
+if st.session_state.qa_last:
+    answer = (
+        st.session_state.qa_last.get("text")
+        or st.session_state.qa_last.get("explanation")
+    )
+
+    if answer:
+        st.markdown(f'<div class="card">{answer}</div>', unsafe_allow_html=True)
+    else:
+        st.json(st.session_state.qa_last)
+
 
         if debug_mode:
             with st.expander("Debug payloads"):
