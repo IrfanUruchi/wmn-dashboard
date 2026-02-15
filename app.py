@@ -422,7 +422,6 @@ with tab_fleet:
             else:
                 st.info("Not enough latency samples for heatmap.")
 
-
 with tab_device:
     if df_devices.empty:
         st.info("Awaiting telemetry...")
@@ -439,6 +438,11 @@ with tab_device:
             else 0,
         )
         dev = st.session_state.selected_device
+
+        # Clear previous diagnostic if device changed
+        if st.session_state.get("qa_device") != dev:
+            st.session_state.qa_last = None
+            st.session_state.qa_device = dev
 
         row = df_devices[df_devices["device"] == dev].head(1)
         mp = data["metrics"].get(dev, {})
@@ -467,7 +471,6 @@ with tab_device:
         kk3.markdown(f'<div class="kpi"><div class="l">RSSI</div><div class="v">{("—" if rssi is None else f"{rssi:.0f} dBm")}</div><div class="h">Threshold bad < {rssi_bad} dBm</div></div>', unsafe_allow_html=True)
         kk4.markdown(f'<div class="kpi"><div class="l">Latency</div><div class="v">{("—" if lat is None else f"{lat:.1f} ms")}</div><div class="h">Warn > {lat_warn} ms</div></div>', unsafe_allow_html=True)
 
-
         st.markdown('<div class="section">Alerts</div>', unsafe_allow_html=True)
 
         alerts = []
@@ -493,8 +496,6 @@ with tab_device:
         else:
             st.success("No active alerts")
 
-        # ---------------- MQTT LLM Output ----------------
-
         st.markdown('<div class="section">Automatic Explanation</div>', unsafe_allow_html=True)
 
         if ep:
@@ -515,34 +516,25 @@ with tab_device:
         col4, col5, col6 = st.columns(3)
 
         mode = None
-
-        if col1.button("Full Diagnostic"):
-            mode = "full"
-        if col2.button("Latency Analysis"):
-            mode = "latency"
-        if col3.button("Signal Integrity"):
-            mode = "signal"
-        if col4.button("Congestion Check"):
-            mode = "congestion"
-        if col5.button("Handover Impact"):
-            mode = "handover"
-        if col6.button("Score Breakdown"):
-            mode = "score"
+        if col1.button("Full Diagnostic"): mode = "full"
+        if col2.button("Latency Analysis"): mode = "latency"
+        if col3.button("Signal Integrity"): mode = "signal"
+        if col4.button("Congestion Check"): mode = "congestion"
+        if col5.button("Handover Impact"): mode = "handover"
+        if col6.button("Score Breakdown"): mode = "score"
 
         if mode and now_s() >= st.session_state.qa_lock_until:
-
             st.session_state.qa_lock_until = now_s() + 6
 
             instruction_block = f"""
 STRICT DIAGNOSTIC MODE: {mode.upper()}
 
-You are a wireless network diagnostics engine.
+You are a wireless diagnostics engine.
+Do NOT explain basic networking concepts.
+Use ONLY provided telemetry.
+Be concise and technical.
 
-Rules:
-- Do NOT explain basic networking concepts.
-- Use ONLY provided telemetry.
-- Be concise and technical.
-- Output EXACTLY in this format:
+Output EXACTLY in this format:
 
 Summary:
 Primary Cause:
@@ -560,8 +552,10 @@ Recommended Action:
                             "analysis": {
                                 "device_id": dev,
                                 "raw": m,
-                                "analysis": a,
-                                "instruction": instruction_block,
+                                "analysis": {
+                                    **a,
+                                    "_diagnostic_instruction": instruction_block
+                                }
                             }
                         },
                         timeout_s=30,
