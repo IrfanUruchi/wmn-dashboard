@@ -457,6 +457,8 @@ with tab_device:
         online = bool(row["online"].iloc[0]) if not row.empty else False
         last_seen = row["last_seen_s"].iloc[0] if not row.empty else None
 
+        # ---------------- Device Summary ----------------
+
         st.markdown('<div class="section">Device Summary</div>', unsafe_allow_html=True)
 
         kk1, kk2, kk3, kk4 = st.columns(4)
@@ -464,6 +466,8 @@ with tab_device:
         kk2.markdown(f'<div class="kpi"><div class="l">Health</div><div class="v">{("—" if health is None else int(health))}</div><div class="h">Analyzer or fallback</div></div>', unsafe_allow_html=True)
         kk3.markdown(f'<div class="kpi"><div class="l">RSSI</div><div class="v">{("—" if rssi is None else f"{rssi:.0f} dBm")}</div><div class="h">Threshold bad < {rssi_bad} dBm</div></div>', unsafe_allow_html=True)
         kk4.markdown(f'<div class="kpi"><div class="l">Latency</div><div class="v">{("—" if lat is None else f"{lat:.1f} ms")}</div><div class="h">Warn > {lat_warn} ms</div></div>', unsafe_allow_html=True)
+
+        # ---------------- Alerts ----------------
 
         st.markdown('<div class="section">Alerts</div>', unsafe_allow_html=True)
 
@@ -490,12 +494,17 @@ with tab_device:
         else:
             st.success("No active alerts")
 
+        # ---------------- LLM Interpretation (MQTT auto) ----------------
+
         st.markdown('<div class="section">LLM Interpretation</div>', unsafe_allow_html=True)
+
         if ep:
             txt = ep.get("text") or ep.get("explanation") or json.dumps(ep, indent=2)
             st.markdown(f'<div class="card">{txt}</div>', unsafe_allow_html=True)
         else:
             st.markdown('<div class="card"><span class="small">No explanation received on wmn/explain/#.</span></div>', unsafe_allow_html=True)
+
+        # ---------------- Ask the Explainer (HTTP manual trigger) ----------------
 
         st.markdown('<div class="section">Ask the Explainer</div>', unsafe_allow_html=True)
 
@@ -504,70 +513,63 @@ with tab_device:
         if "qa_lock_until" not in st.session_state:
             st.session_state.qa_lock_until = 0.0
 
-        q = st.text_input(
-            "Query",
-            placeholder="Why is latency high? Is RSSI sufficient? Is congestion likely?",
-            key="qa_text"
+        # ---- Quick Diagnostics ----
+
+        col1, col2, col3 = st.columns(3)
+        quick = None
+
+        if col1.button("Why is health low?"):
+            quick = "Explain why the wireless score is low."
+
+        if col2.button("Is congestion likely?"):
+            quick = "Assess congestion likelihood from telemetry."
+
+        if col3.button("Signal strength analysis"):
+            quick = "Assess signal strength stability."
+
+        # ---- Optional Custom Question ----
+
+        custom_q = st.text_input(
+            "Optional custom question",
+            placeholder="Ask something specific about this device...",
         )
 
-        if st.button("Submit", type="primary"):
-            st.session_state.qa_lock_until = now_s() + 8
+        submit = st.button(
+            "Run Diagnostic",
+            type="primary",
+            disabled=now_s() < st.session_state.qa_lock_until
+        )
 
-            if not EXPLAINER_HTTP_BASE:
-                st.session_state.qa_last = {"error": "EXPLAINER_HTTP_BASE not configured."}
-            elif not q.strip():
-                st.session_state.qa_last = {"error": "Empty query."}
-            else:
-                try:
-                    structured_prompt = f"""
-You are a fog-layer wireless diagnostics engine.
+        if submit or quick:
 
-Device ID: {dev}
+            st.session_state.qa_lock_until = now_s() + 6
+            question_to_use = quick if quick else custom_q.strip()
 
-Current Metrics:
-{json.dumps(m, indent=2)}
-
-Analyzer Output:
-{json.dumps(a, indent=2)}
-
-User Question:
-{q.strip()}
-
-Instructions:
-- Use ONLY provided telemetry.
-- If data missing, say so clearly.
-- Be technical but concise.
-- Structure output:
-
-Summary:
-Likely Cause:
-Impact:
-Recommended Action:
-"""
+            try:
+                with st.spinner("Running wireless diagnostic..."):
 
                     status, data_json, err = http_post_json(
                         f"{EXPLAINER_HTTP_BASE}/explain",
                         {
                             "analysis": {
                                 "device_id": dev,
-                                "metrics": m if isinstance(m, dict) else {},
-                                "analysis": a if isinstance(a, dict) else {},
-                                "question": structured_prompt,
+                                "raw": m,
+                                "analysis": a,
                             }
                         },
                         timeout_s=30,
                     )
 
-                    if data_json is not None:
-                        st.session_state.qa_last = data_json
-                    else:
-                        st.session_state.qa_last = err or {
-                            "error": "Unknown response",
-                            "status_code": status,
-                        }
+                if data_json is not None:
+                    st.session_state.qa_last = data_json
+                else:
+                    st.session_state.qa_last = err or {
+                        "error": "Unknown response",
+                        "status_code": status,
+                    }
 
-                except Exception as e:
-                    st.session_state.qa_last = {"error": str(e)}
+            except Exception as e:
+                st.session_state.qa_last = {"error": str(e)}
 
         if st.session_state.qa_last:
             answer = (
