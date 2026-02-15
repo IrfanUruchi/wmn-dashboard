@@ -10,19 +10,19 @@ import pandas as pd
 import altair as alt
 import paho.mqtt.client as mqtt
 
-
 MQTT_BROKER = os.getenv("MQTT_BROKER")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "8883"))
 MQTT_USERNAME = os.getenv("MQTT_USERNAME")
 MQTT_PASSWORD = os.getenv("MQTT_PASSWORD")
-EXPLAINER_HTTP_BASE = os.getenv("EXPLAINER_HTTP_BASE")
+EXPLAINER_HTTP_BASE = (os.getenv("EXPLAINER_HTTP_BASE") or "").rstrip("/")
+NGROK_SKIP_WARNING = os.getenv("NGROK_SKIP_WARNING", "true").lower() in ("1", "true", "yes", "y")
 
 TOPICS = ["wmn/metrics/#", "wmn/analysis/#", "wmn/explain/#"]
 
 st.set_page_config(layout="wide", page_title="WMN Command Center")
 
-
-st.markdown("""
+st.markdown(
+    """
 <style>
 .block-container { padding-top: 1.8rem; max-width: 1500px; }
 h1 { letter-spacing: -0.03em; }
@@ -40,12 +40,18 @@ h1 { letter-spacing: -0.03em; }
 .small { font-size:12px; opacity:0.55; }
 hr { border:none; border-top:1px solid rgba(255,255,255,0.08); margin: 16px 0; }
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
+def now_s() -> float:
+    return time.time()
 
-def now_s(): return time.time()
-def clamp(v, lo, hi): return max(lo, min(hi, v))
+def clamp(v: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, v))
 
+def safe_num(x):
+    return float(x) if isinstance(x, (int, float)) else None
 
 def compute_score(rssi, latency, jitter, loss):
     if rssi is None and latency is None and jitter is None and loss is None:
@@ -61,21 +67,28 @@ def compute_score(rssi, latency, jitter, loss):
         s -= 0 if loss <= 1 else 15 if loss <= 3 else 30 if loss <= 6 else 45
     return int(clamp(s, 0, 100))
 
-
 def sev_from_score(score):
-    if score is None: return "unknown"
-    if score >= 85: return "ok"
-    if score >= 70: return "warn"
+    if score is None:
+        return "unknown"
+    if score >= 85:
+        return "ok"
+    if score >= 70:
+        return "warn"
     return "bad"
 
-
-def dot_class(sev):
+def dot_class(sev: str) -> str:
     return "dot ok" if sev == "ok" else "dot warn" if sev == "warn" else "dot bad" if sev == "bad" else "dot"
 
-
-def safe_num(x):
-    return float(x) if isinstance(x, (int, float)) else None
-
+def http_post_json(url: str, payload: dict, timeout_s: int = 30):
+    headers = {"Accept": "application/json"}
+    if NGROK_SKIP_WARNING:
+        headers["ngrok-skip-browser-warning"] = "true"
+    r = requests.post(url, json=payload, headers=headers, timeout=timeout_s)
+    ctype = (r.headers.get("content-type") or "").lower()
+    if "application/json" in ctype:
+        return r.status_code, r.json(), None
+    text = (r.text or "").strip()
+    return r.status_code, None, {"error": "Non-JSON response", "status_code": r.status_code, "content_type": ctype, "text_preview": text[:800]}
 
 @st.cache_resource
 def init_mqtt():
@@ -90,7 +103,7 @@ def init_mqtt():
         "connected": False,
         "last_msg_ts": 0.0,
         "events": deque(maxlen=3000),
-        "lock": lock
+        "lock": lock,
     }
 
     if not MQTT_BROKER:
@@ -111,11 +124,7 @@ def init_mqtt():
             with lock:
                 store["last_msg_ts"] = ts
                 store["last_seen_by_device"][device_id] = ts
-                store["events"].appendleft({
-                    "ts": pd.Timestamp.utcnow(),
-                    "topic": msg.topic,
-                    "device": device_id
-                })
+                store["events"].appendleft({"ts": pd.Timestamp.utcnow(), "topic": msg.topic, "device": device_id})
 
                 if msg.topic.startswith("wmn/metrics"):
                     store["metrics"][device_id] = payload
@@ -154,7 +163,6 @@ def init_mqtt():
 
     return store
 
-
 data = init_mqtt()
 
 if not MQTT_BROKER:
@@ -162,7 +170,6 @@ if not MQTT_BROKER:
     st.stop()
 
 st.title("WMN Wireless Command Center")
-
 
 with st.sidebar:
     st.markdown("### Ops Controls")
@@ -182,13 +189,12 @@ with st.sidebar:
     z_thresh = st.slider("Z-threshold", 1.5, 6.0, 3.0, 0.1)
     min_samples = st.slider("Min samples", 10, 200, 30)
 
-
 def snapshot_devices():
     lock = data.get("lock")
     with lock:
         devices = sorted(list(set(list(data["metrics"].keys()) + list(data["analysis"].keys()) + list(data["explain"].keys()))))
-        rows = []
         now_ts = now_s()
+        rows = []
         for dev in devices:
             mp = data["metrics"].get(dev, {})
             mb = mp.get("metrics", {}) if isinstance(mp, dict) else {}
@@ -213,27 +219,29 @@ def snapshot_devices():
             handover = bool(ab.get("handover_detected"))
             congestion = bool(ab.get("congestion_detected"))
 
-            rows.append({
-                "device": dev,
-                "online": online,
-                "last_seen_s": age_s,
-                "health": health,
-                "rssi_dbm": rssi,
-                "latency_ms": lat,
-                "jitter_ms": jit,
-                "loss_pct": loss,
-                "handover": handover,
-                "congestion": congestion,
-                "interface": iface,
-                "channel": chan
-            })
+            rows.append(
+                {
+                    "device": dev,
+                    "online": online,
+                    "last_seen_s": age_s,
+                    "health": health,
+                    "rssi_dbm": rssi,
+                    "latency_ms": lat,
+                    "jitter_ms": jit,
+                    "loss_pct": loss,
+                    "handover": handover,
+                    "congestion": congestion,
+                    "interface": iface,
+                    "channel": chan,
+                }
+            )
+
         df = pd.DataFrame(rows)
         if not df.empty:
             df = df.sort_values(by=["online", "health", "device"], ascending=[False, False, True])
         return df
 
-
-def compute_latency_anomaly(dev):
+def compute_latency_anomaly(dev: str):
     hist = list(data["lat_hist"].get(dev, []))
     if len(hist) < max(min_samples, z_window):
         return None
@@ -246,8 +254,7 @@ def compute_latency_anomaly(dev):
     z = (float(last["lat"]) - float(last["mu"])) / float(last["sd"])
     return float(z)
 
-
-def build_incidents(df_devices):
+def build_incidents(df_devices: pd.DataFrame):
     incidents = []
     ts = pd.Timestamp.utcnow()
 
@@ -291,7 +298,6 @@ def build_incidents(df_devices):
     df_i = df_i.sort_values(by=["sev", "ts"], ascending=[True, False])
     return df_i
 
-
 df_devices = snapshot_devices()
 
 age = None
@@ -304,34 +310,31 @@ with b1:
     st.markdown(
         f'<span class="badge"><span class="dot {"ok" if data.get("connected") else "warn"}"></span>'
         f'Broker: {"Connected" if data.get("connected") else "Connecting"}'
-        f'</span>',
+        f"</span>",
         unsafe_allow_html=True,
     )
 
 with b2:
-    sev = "ok" if (age is not None and age <= online_grace_s) else "warn" if (age is not None and age <= online_grace_s * 3) else "bad"
+    sev_ingest = "ok" if (age is not None and age <= online_grace_s) else "warn" if (age is not None and age <= online_grace_s * 3) else "bad"
     st.markdown(
-        f'<span class="badge"><span class="dot {sev}"></span>'
+        f'<span class="badge"><span class="dot {sev_ingest}"></span>'
         f'Ingest: {("—" if age is None else str(age) + "s ago")}'
-        f'</span>',
+        f"</span>",
         unsafe_allow_html=True,
     )
 
 with b3:
     total = int(len(df_devices)) if not df_devices.empty else 0
     online = int(df_devices["online"].sum()) if total else 0
+    fleet_dot = "ok" if online == total else ("warn" if online >= max(1, int(total * 0.7)) else "bad")
     st.markdown(
-        f'<span class="badge"><span class="dot {"ok" if online == total else ("warn" if online >= max(1, int(total*0.7)) else "bad")}"></span>'
-        f'Fleet: {online}/{total} online'
-        f'</span>',
+        f'<span class="badge"><span class="dot {fleet_dot}"></span>'
+        f"Fleet: {online}/{total} online"
+        f"</span>",
         unsafe_allow_html=True,
     )
 
-
-tabs = st.tabs(["Fleet", "Device", "Incidents", "Ops"])
-
-tab_fleet, tab_device, tab_incidents, tab_ops = tabs
-
+tab_fleet, tab_device, tab_incidents, tab_ops = st.tabs(["Fleet", "Device", "Incidents", "Ops"])
 
 with tab_fleet:
     st.markdown('<div class="section">Fleet KPIs</div>', unsafe_allow_html=True)
@@ -361,7 +364,7 @@ with tab_fleet:
 
         st.dataframe(
             df_show[["device", "online", "last_seen_s", "health", "status", "rssi_dbm", "latency_ms", "jitter_ms", "loss_pct", "handover", "congestion", "interface", "channel"]],
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             column_config={
                 "device": st.column_config.TextColumn("Device"),
@@ -388,7 +391,7 @@ with tab_fleet:
                 chart = alt.Chart(dist).mark_bar(opacity=0.85).encode(
                     x=alt.X("health:Q", bin=alt.Bin(maxbins=20), title="Health (0-100)"),
                     y=alt.Y("count():Q", title="Devices"),
-                    tooltip=[alt.Tooltip("count():Q", title="Devices")]
+                    tooltip=[alt.Tooltip("count():Q", title="Devices")],
                 ).properties(height=250)
                 st.altair_chart(chart, use_container_width=True)
             else:
@@ -413,12 +416,11 @@ with tab_fleet:
                     x=alt.X("minute:T", title="Time"),
                     y=alt.Y("device:N", title="Device"),
                     color=alt.Color("lat:Q", title="Latency (ms)"),
-                    tooltip=[alt.Tooltip("device:N"), alt.Tooltip("minute:T"), alt.Tooltip("lat:Q", format=".1f")]
+                    tooltip=[alt.Tooltip("device:N"), alt.Tooltip("minute:T"), alt.Tooltip("lat:Q", format=".1f")],
                 ).properties(height=250)
                 st.altair_chart(heat, use_container_width=True)
             else:
                 st.info("Not enough latency samples for heatmap.")
-
 
 with tab_device:
     if df_devices.empty:
@@ -427,10 +429,11 @@ with tab_device:
         if "selected_device" not in st.session_state:
             st.session_state.selected_device = df_devices["device"].iloc[0]
 
+        devices = df_devices["device"].tolist()
         st.session_state.selected_device = st.selectbox(
             "Inspect device",
-            df_devices["device"].tolist(),
-            index=df_devices["device"].tolist().index(st.session_state.selected_device) if st.session_state.selected_device in df_devices["device"].tolist() else 0
+            devices,
+            index=devices.index(st.session_state.selected_device) if st.session_state.selected_device in devices else 0,
         )
         dev = st.session_state.selected_device
 
@@ -503,6 +506,7 @@ with tab_device:
             alerts.append(("warn", "Handover detected"))
         if bool(a.get("congestion_detected")):
             alerts.append(("warn", "Congestion flagged"))
+        z = compute_latency_anomaly(dev)
         if z is not None and abs(z) >= z_thresh:
             alerts.append(("bad" if abs(z) >= z_thresh * 1.35 else "warn", f"Latency anomaly: z={z:.2f}"))
 
@@ -521,12 +525,14 @@ with tab_device:
             st.markdown('<div class="card"><span class="small">No explanation received on wmn/explain/#.</span></div>', unsafe_allow_html=True)
 
         st.markdown('<div class="section">Ask the Explainer</div>', unsafe_allow_html=True)
+
         if "qa_last" not in st.session_state:
             st.session_state.qa_last = None
         if "qa_lock_until" not in st.session_state:
             st.session_state.qa_lock_until = 0.0
 
         q = st.text_input("Query", placeholder="e.g., explain latency spikes + whether congestion is likely", key="qa_text")
+
         if st.button("Submit", type="primary"):
             st.session_state.qa_lock_until = now_s() + 8
             if not EXPLAINER_HTTP_BASE:
@@ -535,12 +541,15 @@ with tab_device:
                 st.session_state.qa_last = {"error": "Empty query."}
             else:
                 try:
-                    resp = requests.post(
+                    status, data_json, err = http_post_json(
                         f"{EXPLAINER_HTTP_BASE}/explain",
-                        json={"analysis": {"question": q, "device_id": dev}},
-                        timeout=30
+                        {"analysis": {"question": q.strip(), "device_id": dev}},
+                        timeout_s=30,
                     )
-                    st.session_state.qa_last = resp.json()
+                    if data_json is not None:
+                        st.session_state.qa_last = data_json
+                    else:
+                        st.session_state.qa_last = err or {"error": "Unknown response", "status_code": status}
                 except Exception as e:
                     st.session_state.qa_last = {"error": str(e)}
 
@@ -552,7 +561,6 @@ with tab_device:
                 st.json(mp)
                 st.json(ap)
                 st.json(ep)
-
 
 with tab_incidents:
     st.markdown('<div class="section">Active Incidents</div>', unsafe_allow_html=True)
@@ -569,7 +577,7 @@ with tab_incidents:
             type_filter = st.multiselect("Type", sorted(df_inc["type"].unique().tolist()), default=sorted(df_inc["type"].unique().tolist()))
             view = df_inc[df_inc["sev"].isin(sev_filter) & df_inc["type"].isin(type_filter)].copy()
 
-            st.dataframe(view, use_container_width=True, hide_index=True)
+            st.dataframe(view, width="stretch", hide_index=True)
 
             csv = view.to_csv(index=False).encode("utf-8")
             st.download_button("Export CSV", data=csv, file_name="wmn_incidents.csv", mime="text/csv")
@@ -581,7 +589,7 @@ with tab_incidents:
                 chart = alt.Chart(by_type).mark_bar(opacity=0.85).encode(
                     x=alt.X("size:Q", title="Count"),
                     y=alt.Y("type:N", sort="-x", title=""),
-                    tooltip=[alt.Tooltip("type:N"), alt.Tooltip("size:Q")]
+                    tooltip=[alt.Tooltip("type:N"), alt.Tooltip("size:Q")],
                 ).properties(height=260)
                 st.altair_chart(chart, use_container_width=True)
             with b2:
@@ -589,10 +597,9 @@ with tab_incidents:
                 chart = alt.Chart(by_dev).mark_bar(opacity=0.85).encode(
                     x=alt.X("size:Q", title="Count"),
                     y=alt.Y("device:N", sort="-x", title=""),
-                    tooltip=[alt.Tooltip("device:N"), alt.Tooltip("size:Q")]
+                    tooltip=[alt.Tooltip("device:N"), alt.Tooltip("size:Q")],
                 ).properties(height=260)
                 st.altair_chart(chart, use_container_width=True)
-
 
 with tab_ops:
     st.markdown('<div class="section">Ingest & Event Stream</div>', unsafe_allow_html=True)
@@ -603,7 +610,7 @@ with tab_ops:
 
     if events:
         df_e = pd.DataFrame(events)
-        st.dataframe(df_e, use_container_width=True, hide_index=True)
+        st.dataframe(df_e, width="stretch", hide_index=True)
     else:
         st.info("No events yet.")
 
@@ -613,19 +620,18 @@ with tab_ops:
         f'<div style="font-size:22px;font-weight:800">{1200}</div>'
         f'<div class="small">Score samples per device</div>'
         f'<div style="font-size:22px;font-weight:800">{1200}</div></div>',
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
 
     st.markdown('<div class="section">Health Model</div>', unsafe_allow_html=True)
     st.markdown(
         '<div class="card">'
         '<div class="small">Primary</div><div style="font-size:16px;font-weight:800">Analyzer score (wireless_score_0_100)</div>'
-        '<hr/>'
+        "<hr/>"
         '<div class="small">Fallback</div><div style="font-size:16px;font-weight:800">Local composite score from RSSI + latency + jitter + loss</div>'
-        '</div>',
-        unsafe_allow_html=True
+        "</div>",
+        unsafe_allow_html=True,
     )
-
 
 should_refresh = (not pause_refresh) and (now_s() >= st.session_state.get("qa_lock_until", 0.0))
 if should_refresh:
