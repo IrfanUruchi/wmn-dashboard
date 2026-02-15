@@ -433,7 +433,9 @@ with tab_device:
         st.session_state.selected_device = st.selectbox(
             "Inspect device",
             devices,
-            index=devices.index(st.session_state.selected_device) if st.session_state.selected_device in devices else 0,
+            index=devices.index(st.session_state.selected_device)
+            if st.session_state.selected_device in devices
+            else 0,
         )
         dev = st.session_state.selected_device
 
@@ -456,38 +458,12 @@ with tab_device:
         last_seen = row["last_seen_s"].iloc[0] if not row.empty else None
 
         st.markdown('<div class="section">Device Summary</div>', unsafe_allow_html=True)
+
         kk1, kk2, kk3, kk4 = st.columns(4)
         kk1.markdown(f'<div class="kpi"><div class="l">Status</div><div class="v">{("ONLINE" if online else "OFFLINE")}</div><div class="h">Last seen {("—" if last_seen is None else str(int(last_seen))+"s")}</div></div>', unsafe_allow_html=True)
         kk2.markdown(f'<div class="kpi"><div class="l">Health</div><div class="v">{("—" if health is None else int(health))}</div><div class="h">Analyzer or fallback</div></div>', unsafe_allow_html=True)
         kk3.markdown(f'<div class="kpi"><div class="l">RSSI</div><div class="v">{("—" if rssi is None else f"{rssi:.0f} dBm")}</div><div class="h">Threshold bad < {rssi_bad} dBm</div></div>', unsafe_allow_html=True)
         kk4.markdown(f'<div class="kpi"><div class="l">Latency</div><div class="v">{("—" if lat is None else f"{lat:.1f} ms")}</div><div class="h">Warn > {lat_warn} ms</div></div>', unsafe_allow_html=True)
-
-        st.markdown('<div class="section">Time Series</div>', unsafe_allow_html=True)
-
-        c1, c2 = st.columns([2, 1])
-
-        with c1:
-            hist = list(data["lat_hist"].get(dev, []))
-            if hist:
-                dfh = pd.DataFrame(hist).sort_values("t")
-                dfh["ma"] = dfh["lat"].rolling(12, min_periods=1).mean()
-                base = alt.Chart(dfh).encode(x=alt.X("t:T", title=""))
-                l1 = base.mark_line(opacity=0.85).encode(y=alt.Y("lat:Q", title="Latency (ms)"))
-                l2 = base.mark_line(strokeDash=[6, 4], opacity=0.9).encode(y=alt.Y("ma:Q", title=""))
-                warn_rule = alt.Chart(pd.DataFrame({"y": [lat_warn]})).mark_rule(opacity=0.25).encode(y="y:Q")
-                st.altair_chart((l1 + l2 + warn_rule).properties(height=320), use_container_width=True)
-            else:
-                st.info("No latency history yet.")
-
-        with c2:
-            z = compute_latency_anomaly(dev)
-            st.markdown('<div class="card">', unsafe_allow_html=True)
-            sev = "ok" if (health is not None and health >= 85) else "warn" if (health is not None and health >= 70) else "bad" if health is not None else "unknown"
-            st.markdown(f'<div class="badge"><span class="{dot_class(sev)}"></span>Health tier: {sev.upper()}</div>', unsafe_allow_html=True)
-            st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
-            st.markdown(f"<div class='small'>Latency anomaly z-score</div><div style='font-size:26px;font-weight:800'>{('—' if z is None else f'{z:.2f}')}</div>", unsafe_allow_html=True)
-            st.markdown(f"<div class='small'>Anomaly if |z| ≥ {z_thresh:.1f}</div>", unsafe_allow_html=True)
-            st.markdown("</div>", unsafe_allow_html=True)
 
         st.markdown('<div class="section">Alerts</div>', unsafe_allow_html=True)
 
@@ -506,9 +482,6 @@ with tab_device:
             alerts.append(("warn", "Handover detected"))
         if bool(a.get("congestion_detected")):
             alerts.append(("warn", "Congestion flagged"))
-        z = compute_latency_anomaly(dev)
-        if z is not None and abs(z) >= z_thresh:
-            alerts.append(("bad" if abs(z) >= z_thresh * 1.35 else "warn", f"Latency anomaly: z={z:.2f}"))
 
         if alerts:
             level = "bad" if any(s == "bad" for s, _ in alerts) else "warn"
@@ -526,29 +499,27 @@ with tab_device:
 
         st.markdown('<div class="section">Ask the Explainer</div>', unsafe_allow_html=True)
 
-if "qa_last" not in st.session_state:
-    st.session_state.qa_last = None
-if "qa_lock_until" not in st.session_state:
-    st.session_state.qa_lock_until = 0.0
+        if "qa_last" not in st.session_state:
+            st.session_state.qa_last = None
+        if "qa_lock_until" not in st.session_state:
+            st.session_state.qa_lock_until = 0.0
 
-q = st.text_input(
-    "Query",
-    placeholder="Why is latency high? Is RSSI sufficient? Is congestion likely?",
-    key="qa_text"
-)
+        q = st.text_input(
+            "Query",
+            placeholder="Why is latency high? Is RSSI sufficient? Is congestion likely?",
+            key="qa_text"
+        )
 
-if st.button("Submit", type="primary"):
-    st.session_state.qa_lock_until = now_s() + 8
+        if st.button("Submit", type="primary"):
+            st.session_state.qa_lock_until = now_s() + 8
 
-    if not EXPLAINER_HTTP_BASE:
-        st.session_state.qa_last = {"error": "EXPLAINER_HTTP_BASE not configured."}
-
-    elif not q.strip():
-        st.session_state.qa_last = {"error": "Empty query."}
-
-    else:
-        try:
-            structured_prompt = f"""
+            if not EXPLAINER_HTTP_BASE:
+                st.session_state.qa_last = {"error": "EXPLAINER_HTTP_BASE not configured."}
+            elif not q.strip():
+                st.session_state.qa_last = {"error": "Empty query."}
+            else:
+                try:
+                    structured_prompt = f"""
 You are a fog-layer wireless diagnostics engine.
 
 Device ID: {dev}
@@ -574,47 +545,47 @@ Impact:
 Recommended Action:
 """
 
-            status, data_json, err = http_post_json(
-                f"{EXPLAINER_HTTP_BASE}/explain",
-                {
-                    "analysis": {
-                        "device_id": dev,
-                        "metrics": m if isinstance(m, dict) else {},
-                        "analysis": a if isinstance(a, dict) else {},
-                        "question": structured_prompt,
-                    }
-                },
-                timeout_s=30,
+                    status, data_json, err = http_post_json(
+                        f"{EXPLAINER_HTTP_BASE}/explain",
+                        {
+                            "analysis": {
+                                "device_id": dev,
+                                "metrics": m if isinstance(m, dict) else {},
+                                "analysis": a if isinstance(a, dict) else {},
+                                "question": structured_prompt,
+                            }
+                        },
+                        timeout_s=30,
+                    )
+
+                    if data_json is not None:
+                        st.session_state.qa_last = data_json
+                    else:
+                        st.session_state.qa_last = err or {
+                            "error": "Unknown response",
+                            "status_code": status,
+                        }
+
+                except Exception as e:
+                    st.session_state.qa_last = {"error": str(e)}
+
+        if st.session_state.qa_last:
+            answer = (
+                st.session_state.qa_last.get("text")
+                or st.session_state.qa_last.get("explanation")
             )
 
-            if data_json is not None:
-                st.session_state.qa_last = data_json
+            if answer:
+                st.markdown(f'<div class="card">{answer}</div>', unsafe_allow_html=True)
             else:
-                st.session_state.qa_last = err or {
-                    "error": "Unknown response",
-                    "status_code": status,
-                }
-
-        except Exception as e:
-            st.session_state.qa_last = {"error": str(e)}
-
-if st.session_state.qa_last:
-    answer = (
-        st.session_state.qa_last.get("text")
-        or st.session_state.qa_last.get("explanation")
-    )
-
-    if answer:
-        st.markdown(f'<div class="card">{answer}</div>', unsafe_allow_html=True)
-    else:
-        st.json(st.session_state.qa_last)
-
+                st.json(st.session_state.qa_last)
 
         if debug_mode:
             with st.expander("Debug payloads"):
                 st.json(mp)
                 st.json(ap)
                 st.json(ep)
+
 
 with tab_incidents:
     st.markdown('<div class="section">Active Incidents</div>', unsafe_allow_html=True)
