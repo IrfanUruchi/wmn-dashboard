@@ -543,7 +543,15 @@ with tab_device:
                 try:
                     status, data_json, err = http_post_json(
                         f"{EXPLAINER_HTTP_BASE}/explain",
-                        {"analysis": {"question": q.strip(), "device_id": dev}},
+                        {
+                            "analysis": {
+                                "device_id": dev,
+                                "metrics": m if isinstance(m, dict) else {},
+                                "analysis": a if isinstance(a, dict) else {},
+                                "question": q.strip(),
+                             }
+                        }
+
                         timeout_s=30,
                     )
                     if data_json is not None:
