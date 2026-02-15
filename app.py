@@ -422,6 +422,7 @@ with tab_fleet:
             else:
                 st.info("Not enough latency samples for heatmap.")
 
+
 with tab_device:
     if df_devices.empty:
         st.info("Awaiting telemetry...")
@@ -457,7 +458,6 @@ with tab_device:
         online = bool(row["online"].iloc[0]) if not row.empty else False
         last_seen = row["last_seen_s"].iloc[0] if not row.empty else None
 
-        # ---------------- Device Summary ----------------
 
         st.markdown('<div class="section">Device Summary</div>', unsafe_allow_html=True)
 
@@ -467,7 +467,6 @@ with tab_device:
         kk3.markdown(f'<div class="kpi"><div class="l">RSSI</div><div class="v">{("—" if rssi is None else f"{rssi:.0f} dBm")}</div><div class="h">Threshold bad < {rssi_bad} dBm</div></div>', unsafe_allow_html=True)
         kk4.markdown(f'<div class="kpi"><div class="l">Latency</div><div class="v">{("—" if lat is None else f"{lat:.1f} ms")}</div><div class="h">Warn > {lat_warn} ms</div></div>', unsafe_allow_html=True)
 
-        # ---------------- Alerts ----------------
 
         st.markdown('<div class="section">Alerts</div>', unsafe_allow_html=True)
 
@@ -494,59 +493,66 @@ with tab_device:
         else:
             st.success("No active alerts")
 
-        # ---------------- LLM Interpretation (MQTT auto) ----------------
+        # ---------------- MQTT LLM Output ----------------
 
-        st.markdown('<div class="section">LLM Interpretation</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section">Automatic Explanation</div>', unsafe_allow_html=True)
 
         if ep:
             txt = ep.get("text") or ep.get("explanation") or json.dumps(ep, indent=2)
             st.markdown(f'<div class="card">{txt}</div>', unsafe_allow_html=True)
         else:
-            st.markdown('<div class="card"><span class="small">No explanation received on wmn/explain/#.</span></div>', unsafe_allow_html=True)
+            st.markdown('<div class="card"><span class="small">No automatic explanation received.</span></div>', unsafe_allow_html=True)
 
-        # ---------------- Ask the Explainer (HTTP manual trigger) ----------------
 
-        st.markdown('<div class="section">Ask the Explainer</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section">Run Structured Diagnostic</div>', unsafe_allow_html=True)
 
         if "qa_last" not in st.session_state:
             st.session_state.qa_last = None
         if "qa_lock_until" not in st.session_state:
             st.session_state.qa_lock_until = 0.0
 
-        # ---- Quick Diagnostics ----
-
         col1, col2, col3 = st.columns(3)
-        quick = None
+        col4, col5, col6 = st.columns(3)
 
-        if col1.button("Why is health low?"):
-            quick = "Explain why the wireless score is low."
+        mode = None
 
-        if col2.button("Is congestion likely?"):
-            quick = "Assess congestion likelihood from telemetry."
+        if col1.button("Full Diagnostic"):
+            mode = "full"
+        if col2.button("Latency Analysis"):
+            mode = "latency"
+        if col3.button("Signal Integrity"):
+            mode = "signal"
+        if col4.button("Congestion Check"):
+            mode = "congestion"
+        if col5.button("Handover Impact"):
+            mode = "handover"
+        if col6.button("Score Breakdown"):
+            mode = "score"
 
-        if col3.button("Signal strength analysis"):
-            quick = "Assess signal strength stability."
-
-        # ---- Optional Custom Question ----
-
-        custom_q = st.text_input(
-            "Optional custom question",
-            placeholder="Ask something specific about this device...",
-        )
-
-        submit = st.button(
-            "Run Diagnostic",
-            type="primary",
-            disabled=now_s() < st.session_state.qa_lock_until
-        )
-
-        if submit or quick:
+        if mode and now_s() >= st.session_state.qa_lock_until:
 
             st.session_state.qa_lock_until = now_s() + 6
-            question_to_use = quick if quick else custom_q.strip()
+
+            instruction_block = f"""
+STRICT DIAGNOSTIC MODE: {mode.upper()}
+
+You are a wireless network diagnostics engine.
+
+Rules:
+- Do NOT explain basic networking concepts.
+- Use ONLY provided telemetry.
+- Be concise and technical.
+- Output EXACTLY in this format:
+
+Summary:
+Primary Cause:
+Metric Evidence:
+Operational Impact:
+Recommended Action:
+"""
 
             try:
-                with st.spinner("Running wireless diagnostic..."):
+                with st.spinner("Running structured diagnostic..."):
 
                     status, data_json, err = http_post_json(
                         f"{EXPLAINER_HTTP_BASE}/explain",
@@ -555,6 +561,7 @@ with tab_device:
                                 "device_id": dev,
                                 "raw": m,
                                 "analysis": a,
+                                "instruction": instruction_block,
                             }
                         },
                         timeout_s=30,
@@ -587,6 +594,7 @@ with tab_device:
                 st.json(mp)
                 st.json(ap)
                 st.json(ep)
+
 
 
 with tab_incidents:
