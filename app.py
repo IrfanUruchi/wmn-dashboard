@@ -550,7 +550,7 @@ with tab_device:
                                 "analysis": a if isinstance(a, dict) else {},
                                 "question": q.strip(),
                              }
-                        }
+                        },
 
                         timeout_s=30,
                     )
